@@ -6,7 +6,7 @@ pipeline {
             steps {
                 sh '''
                     echo "Activating Python virtual environment..."
-                    source /opt/jenkins-python/bin/activate
+                    . /opt/jenkins-python/bin/activate
                     echo "Python version:"
                     python3 --version
                     echo "Installed packages:"
@@ -24,7 +24,7 @@ pipeline {
                         cd /var/jenkins_home/workspace/OpenBMC-Testing
                         
                         # Активируем virtual environment для тестов
-                        source /opt/jenkins-python/bin/activate
+                        . /opt/jenkins-python/bin/activate
                         
                         if [ -f "autotestsOpenBmc.py" ]; then
                             echo "Found autotestsOpenBmc.py - running real tests against local OpenBMC..."
@@ -55,7 +55,7 @@ pipeline {
                         echo "=== Running Load Tests ==="
                         cd /var/jenkins_home/workspace/OpenBMC-Testing
                         
-                        source /opt/jenkins-python/bin/activate
+                        . /opt/jenkins-python/bin/activate
                         
                         if [ -f "loadtestsOpenBmc.py" ]; then
                             echo "Found loadtestsOpenBmc.py - running load tests..."
@@ -87,7 +87,7 @@ pipeline {
                         echo "=== Running WebUI Tests ==="
                         cd /var/jenkins_home/workspace/OpenBMC-Testing
                         
-                        source /opt/jenkins-python/bin/activate
+                        . /opt/jenkins-python/bin/activate
                         
                         if [ -f "webUItestsOpenBmc.py" ]; then
                             echo "Found webUItestsOpenBmc.py - attempting to run WebUI tests..."
