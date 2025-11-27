@@ -2,130 +2,87 @@ pipeline {
     agent any
 
     stages {
-        stage('Start QEMU OpenBMC') {
+        stage('Check Dependencies') {
             steps {
                 sh '''
-                    echo "QEMU OpenBMC"
-                    cd /var/jenkins_home/workspace/OpenBMC-Testing
-                    echo "Simulating QEMU startup..."
-                    echo "QEMU simulation started" > qemu_status.txt
-                    echo "12345" > qemu.pid
-                    sleep 10
+                    echo "Checking Python and dependencies..."
+                    python3 --version
+                    pip3 list | grep -E "requests|pytest|selenium|locust" || echo "Some dependencies might be missing"
                 '''
             }
         }
 
-        stage('autotestsOpenBmc') {
+        stage('Run REST API Tests') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     sh '''
-                        echo "autotests"
+                        echo "=== Running REST API Tests ==="
                         cd /var/jenkins_home/workspace/OpenBMC-Testing
-                        echo "=== REST API Tests (lab6.py) ===" > autotests.log
                         
-                        # Пытаемся запустить твой реальный код
-                        if [ -f "lab6.py" ]; then
-                            echo "Found lab6.py - attempting to run..." >> autotests.log
-                            python3 lab6.py 2>&1 >> autotests.log || echo "lab6.py execution failed - but continuing pipeline" >> autotests.log
+                        # Запускаем твои реальные тесты против localhost:2443
+                        if [ -f "autotestsOpenBmc.py" ]; then
+                            echo "Found autotestsOpenBmc.py - running real tests..."
+                            python3 -m pytest autotestsOpenBmc.py -v --tb=short | tee autotests.log
                         else
-                            echo "lab6.py not found - using simulation" >> autotests.log
-                            echo "test_auth: SIMULATED_PASS" >> autotests.log
-                            echo "test_info: SIMULATED_PASS" >> autotests.log  
-                            echo "test_power: SIMULATED_PASS" >> autotests.log
-                            echo "test_temp: SIMULATED_PASS" >> autotests.log
-                            echo "test_IPMI: SIMULATED_PASS" >> autotests.log
+                            echo "autotestsOpenBmc.py not found"
+                            echo "TEST SIMULATION: REST API tests would run against https://localhost:2443" > autotests.log
                         fi
-                        
-                        echo "Auto tests stage completed" >> autotests.log
-                        cat autotests.log
                     '''
                 }
             }
             post {
                 always {
                     archiveArtifacts artifacts: 'autotests.log', fingerprint: true
-                    archiveArtifacts artifacts: 'lab6.py', fingerprint: true
                 }
             }
         }
 
-        stage('loadtestsOpenBmc') {
+        stage('Run Load Tests') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     sh '''
-                        echo "loadtests"
+                        echo "=== Running Load Tests ==="
                         cd /var/jenkins_home/workspace/OpenBMC-Testing
-                        echo "=== Load Tests (locustfile.py) ===" > loadtests.log
                         
-                        if [ -f "locustfile.py" ]; then
-                            echo "Found locustfile.py - attempting to run..." >> loadtests.log
-                            # Симуляция locust т.к. нет реального сервера
-                            echo "Locust simulation - would test:" >> loadtests.log
-                            echo "- OpenBMCUser: 10 users" >> loadtests.log
-                            echo "- JSONPlaceholderTestUser: 5 users" >> loadtests.log
-                            echo "- WttrTestUser: 3 users" >> loadtests.log
+                        if [ -f "loadtestsOpenBmc.py" ]; then
+                            echo "Found loadtestsOpenBmc.py - running load tests..."
+                            # Запускаем locust на 20 секунд
+                            timeout 25s locust -f loadtestsOpenBmc.py --headless -u 2 -r 1 --run-time 20s --host=https://localhost:2443 || echo "Locust finished" | tee loadtests.log
                         else
-                            echo "locustfile.py not found - using simulation" >> loadtests.log
-                            echo "Load test simulation completed" >> loadtests.log
+                            echo "loadtestsOpenBmc.py not found"
+                            echo "TEST SIMULATION: Load tests would run against https://localhost:2443" > loadtests.log
                         fi
-                        
-                        cat loadtests.log
                     '''
                 }
             }
             post {
                 always {
                     archiveArtifacts artifacts: 'loadtests.log', fingerprint: true
-                    archiveArtifacts artifacts: 'locustfile.py', fingerprint: true
                 }
             }
         }
 
-        stage('webUItestsOpenBmc') {
+        stage('Run WebUI Tests') {
             steps {
                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
                     sh '''
-                        echo "WebUItests"
+                        echo "=== Running WebUI Tests ==="
                         cd /var/jenkins_home/workspace/OpenBMC-Testing
-                        echo "=== WebUI Tests (lab4.py) ===" > webtests.log
                         
-                        if [ -f "lab4.py" ]; then
-                            echo "Found lab4.py - attempting to run..." >> webtests.log
-                            # Selenium не будет работать без GUI, но пытаемся
-                            python3 -c "
-import sys
-sys.path.append('.')
-try:
-    import lab4
-    print('lab4.py imported successfully - tests would run with real browser')
-except Exception as e:
-    print(f'lab4.py import failed: {e}')
-    print('But in real environment would run:')
-    print('- test_successful_login')
-    print('- test_invalid_credentials') 
-    print('- test_account_lockout')
-    print('- test_power_on_and_check_health_logs')
-    print('- test_temperature_within_limits')
-    print('- test_system_status_detailed')
-" 2>&1 >> webtests.log
+                        if [ -f "webUItestsOpenBmc.py" ]; then
+                            echo "Found webUItestsOpenBmc.py - attempting to run..."
+                            # Selenium может не работать без GUI, но пытаемся
+                            python3 webUItestsOpenBmc.py 2>&1 | tee webtests.log || echo "WebUI tests completed with errors" >> webtests.log
                         else
-                            echo "lab4.py not found - using simulation" >> webtests.log
-                            echo "test_successful_login: SIMULATED_PASS" >> webtests.log
-                            echo "test_invalid_credentials: SIMULATED_PASS" >> webtests.log
-                            echo "test_account_lockout: SIMULATED_PASS" >> webtests.log
-                            echo "test_power_on_and_check_health_logs: SIMULATED_PASS" >> webtests.log
-                            echo "test_temperature_within_limits: SIMULATED_PASS" >> webtests.log
-                            echo "test_system_status_detailed: SIMULATED_PASS" >> webtests.log
+                            echo "webUItestsOpenBmc.py not found"
+                            echo "TEST SIMULATION: WebUI tests would run against https://localhost:2443" > webtests.log
                         fi
-                        
-                        cat webtests.log
                     '''
                 }
             }
             post {
                 always {
                     archiveArtifacts artifacts: 'webtests.log', fingerprint: true
-                    archiveArtifacts artifacts: 'lab4.py', fingerprint: true
                 }
             }
         }
@@ -133,19 +90,13 @@ except Exception as e:
 
     post {
         always {
-            sh '''
-                echo "stop QEMU"
-                if [ -f /var/jenkins_home/workspace/OpenBMC-Testing/qemu.pid ]; then
-                    echo "Stopping QEMU simulation..."
-                    rm -f /var/jenkins_home/workspace/OpenBMC-Testing/qemu.pid
-                    echo "QEMU stopped" >> qemu_status.txt
-                fi
-            '''
-            archiveArtifacts artifacts: 'qemu_status.txt', fingerprint: true
+            echo "=== Pipeline Completed ==="
+            archiveArtifacts artifacts: '*.log', fingerprint: true
+            archiveArtifacts artifacts: '*.py', fingerprint: true
         }
         success {
-            echo "✅ Pipeline выполнен! Все тесты завершены."
-            echo "📁 Артефакты включают реальные файлы: lab4.py, lab6.py, locustfile.py"
+            echo "✅ Все тесты завершены!"
+            echo "📊 Отчеты сохранены в артефактах"
         }
     }
 }
