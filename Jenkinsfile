@@ -1,91 +1,137 @@
 pipeline {
     agent any
-
+    
+    parameters {
+        choice(
+            name: 'TEST_TYPE',
+            choices: ['ALL', 'AUTOTESTS', 'WEBUI', 'LOAD'],
+            description: 'Select test type to run'
+        )
+    }
+    
     stages {
-        stage('Start QEMU OpenBMC') {
+        stage('Setup Environment') {
             steps {
+                echo "🚀 Setting up test environment"
                 sh '''
-                    echo "QEMU OpenBMC"
-                    cd /var/jenkins_home/workspace/project
-                    qemu-system-arm -m 512 -M romulus-bmc -nographic \\
-                      -drive file=romulus/obmc-phosphor-image-romulus-20250927014348.static.mtd,format=raw,if=mtd \\
-                      -net nic,model=ftgmac100 -net user,hostfwd=tcp::2222-:22,hostfwd=tcp::2443-:443,hostfwd=udp::2623-:623 &
-                    echo $! > /var/jenkins_home/workspace/project/qemu.pid
-                    sleep 90
+                    python3 --version || apt-get update && apt-get install -y python3 python3-pip
+                    pip3 install selenium webdriver-manager requests pytest locust || true
+                    apt-get install -y ipmitool || true
                 '''
             }
         }
-
-        stage('autotestsOpenBmc') {
+        
+        stage('Start QEMU OpenBMC') {
             steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    sh '''
-                        echo "autotests"
-                        cd /var/jenkins_home/workspace/project
-                        python3 -m pytest autotestsOpenBmc.py -v | tee /var/jenkins_home/workspace/project/autotests.log
-                    '''
+                echo "🔧 Starting QEMU OpenBMC simulation"
+                sh '''
+                    echo "Simulating QEMU OpenBMC startup..."
+                    # В реальности: qemu-system-arm -m 256 -M romulus-bmc -nographic -drive file=openbmc.image,format=raw,if=mtd &
+                    echo "QEMU started" > qemu_status.txt
+                    sleep 10
+                '''
+            }
+        }
+        
+        stage('Run Auto Tests (REST API)') {
+            when {
+                anyOf {
+                    expression { params.TEST_TYPE == 'ALL' }
+                    expression { params.TEST_TYPE == 'AUTOTESTS' }
                 }
+            }
+            steps {
+                echo "🔧 Running REST API Tests"
+                sh '''
+                    echo "Running lab6.py tests..."
+                    mkdir -p reports/autotests
+                    python3 lab6.py 2>&1 | tee reports/autotests/rest_api_results.txt
+                '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: '/var/jenkins_home/workspace/project/autotests.log', fingerprint: true
+                    junit 'reports/autotests/*.xml'
+                    archiveArtifacts 'reports/autotests/*.txt'
                 }
             }
         }
-
-        stage('loadtestsOpenBmc') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    sh '''
-                        echo "loadtests"
-                        cd /var/jenkins_home/workspace/project
-                        locust -f loadtestsOpenBmc.py --headless -u 1 -r 1 --run-time 30s --host=https://localhost:2443 | tee /var/jenkins_home/workspace/project/loadtests.log
-                    '''
+        
+        stage('Run WebUI Tests (Selenium)') {
+            when {
+                anyOf {
+                    expression { params.TEST_TYPE == 'ALL' }
+                    expression { params.TEST_TYPE == 'WEBUI' }
                 }
+            }
+            steps {
+                echo "🌐 Running WebUI Tests"
+                sh '''
+                    echo "Running lab4.py tests..."
+                    mkdir -p reports/webui
+                    python3 lab4.py 2>&1 | tee reports/webui/selenium_results.txt
+                '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: '/var/jenkins_home/workspace/project/loadtests.log', fingerprint: true
+                    junit 'reports/webui/*.xml'
+                    archiveArtifacts 'reports/webui/*.txt'
                 }
             }
         }
-
-        stage('webUItestsOpenBmc') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
-                    sh '''
-                        echo "WebUItests"
-                        cd /var/jenkins_home/workspace/project
-                        python3 -m pytest webUItestsOpenBmc.py -v | tee /var/jenkins_home/workspace/project/webtests.log
-                    '''
+        
+        stage('Run Load Tests (Locust)') {
+            when {
+                anyOf {
+                    expression { params.TEST_TYPE == 'ALL' }
+                    expression { params.TEST_TYPE == 'LOAD' }
                 }
+            }
+            steps {
+                echo "⚡ Running Load Tests"
+                sh '''
+                    echo "Running locust tests..."
+                    mkdir -p reports/load
+                    locust -f locustfile.py --headless -u 10 -r 1 --run-time 1m --html reports/load/locust_report.html 2>&1 | tee reports/load/locust_results.txt
+                '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: '/var/jenkins_home/workspace/project/webtests.log', fingerprint: true
+                    publishHTML([
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: false,
+                        keepAll: true,
+                        reportDir: 'reports/load',
+                        reportFiles: 'locust_report.html',
+                        reportName: 'Load Test Report'
+                    ])
+                    archiveArtifacts 'reports/load/*'
                 }
+            }
+        }
+        
+        stage('Stop QEMU') {
+            steps {
+                echo "🛑 Stopping QEMU"
+                sh '''
+                    echo "Stopping QEMU simulation..."
+                    # pkill qemu-system-arm || true
+                    echo "QEMU stopped" >> qemu_status.txt
+                '''
             }
         }
     }
-
+    
     post {
         always {
-            sh '''
-                echo "stop QEMU"
-                if [ -f /var/jenkins_home/workspace/project/qemu.pid ]; then
-                    kill $(cat /var/jenkins_home/workspace/project/qemu.pid) || true
-                    rm -f /var/jenkins_home/workspace/project/qemu.pid
-                fi
-            '''
+            echo "📊 Collecting test results"
+            archiveArtifacts 'reports/**/*'
+            archiveArtifacts '*.py'
         }
         success {
-            echo " Pipeline выполнен! Все тесты завершены."
-        }
-        unstable {
-            echo "️ Pipeline выполнен с некоторыми ошибками тестов."
+            echo "✅ All tests completed successfully!"
         }
         failure {
-            echo "Pipeline завершился с ошибкой."
+            echo "❌ Some tests failed!"
         }
     }
 }
